@@ -1,35 +1,35 @@
 from fastapi import APIRouter, Depends, Query
-from sqlmodel import Session, select, func
-from typing import List
-from app.database import get_db
-from app.models import Item, InteractionLog, Learner
+from sqlmodel import select, func
+from sqlmodel.ext.asyncio.session import AsyncSession
+from app.database import get_session
+from app.models.item import ItemRecord as Item
+from app.models.learner import Learner
+from app.models.interaction_log import InteractionLog
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
+
 @router.get("/scores")
-def get_scores_histogram(
-    db: Session = Depends(get_db),
-    lab: str = Query(..., description="Lab identifier, e.g. lab-04")
+async def get_scores_histogram(
+    lab: str = Query(..., description="Lab identifier, e.g. lab-04"),
+    session: AsyncSession = Depends(get_session)
 ):
-    lab_item = db.exec(
+    lab_item = (await session.exec(
         select(Item).where(Item.title.contains(lab.replace("-", " ").title()))
-    ).first()
+    )).first()
     if not lab_item:
         return []
 
-    tasks = db.exec(select(Item).where(Item.parent_id == lab_item.id)).all()
+    tasks = (await session.exec(
+        select(Item).where(Item.parent_id == lab_item.id)
+    )).all()
     task_ids = [task.id for task in tasks]
 
-    scores = db.exec(
+    scores = (await session.exec(
         select(InteractionLog.score).where(InteractionLog.item_id.in_(task_ids))
-    ).all()
+    )).all()
 
-    buckets = {
-        "0-25": 0,
-        "26-50": 0,
-        "51-75": 0,
-        "76-100": 0,
-    }
+    buckets = {"0-25": 0, "26-50": 0, "51-75": 0, "76-100": 0}
     for score in scores:
         if score is not None:
             if score <= 25:
@@ -43,29 +43,30 @@ def get_scores_histogram(
 
     return [{"bucket": k, "count": v} for k, v in buckets.items()]
 
+
 @router.get("/pass-rates")
-def get_pass_rates(
-    db: Session = Depends(get_db),
-    lab: str = Query(..., description="Lab identifier, e.g. lab-04")
+async def get_pass_rates(
+    lab: str = Query(..., description="Lab identifier, e.g. lab-04"),
+    session: AsyncSession = Depends(get_session)
 ):
-    lab_item = db.exec(
+    lab_item = (await session.exec(
         select(Item).where(Item.title.contains(lab.replace("-", " ").title()))
-    ).first()
+    )).first()
     if not lab_item:
         return []
 
-    tasks = db.exec(
+    tasks = (await session.exec(
         select(Item).where(Item.parent_id == lab_item.id).order_by(Item.title)
-    ).all()
+    )).all()
 
     result = []
     for task in tasks:
-        stats = db.exec(
+        stats = (await session.exec(
             select(
                 func.avg(InteractionLog.score).label("avg_score"),
                 func.count(InteractionLog.id).label("attempts")
             ).where(InteractionLog.item_id == task.id)
-        ).first()
+        )).first()
         
         if stats:
             avg_score = round(stats.avg_score or 0, 1)
@@ -82,21 +83,24 @@ def get_pass_rates(
     
     return result
 
+
 @router.get("/timeline")
-def get_timeline(
-    db: Session = Depends(get_db),
-    lab: str = Query(..., description="Lab identifier, e.g. lab-04")
+async def get_timeline(
+    lab: str = Query(..., description="Lab identifier, e.g. lab-04"),
+    session: AsyncSession = Depends(get_session)
 ):
-    lab_item = db.exec(
+    lab_item = (await session.exec(
         select(Item).where(Item.title.contains(lab.replace("-", " ").title()))
-    ).first()
+    )).first()
     if not lab_item:
         return []
 
-    tasks = db.exec(select(Item).where(Item.parent_id == lab_item.id)).all()
+    tasks = (await session.exec(
+        select(Item).where(Item.parent_id == lab_item.id)
+    )).all()
     task_ids = [task.id for task in tasks]
 
-    results = db.exec(
+    results = (await session.exec(
         select(
             func.date(InteractionLog.created_at).label("date"),
             func.count().label("submissions")
@@ -104,25 +108,28 @@ def get_timeline(
         .where(InteractionLog.item_id.in_(task_ids))
         .group_by("date")
         .order_by("date")
-    ).all()
+    )).all()
 
     return [{"date": str(r.date), "submissions": r.submissions} for r in results]
 
+
 @router.get("/groups")
-def get_groups(
-    db: Session = Depends(get_db),
-    lab: str = Query(..., description="Lab identifier, e.g. lab-04")
+async def get_groups(
+    lab: str = Query(..., description="Lab identifier, e.g. lab-04"),
+    session: AsyncSession = Depends(get_session)
 ):
-    lab_item = db.exec(
+    lab_item = (await session.exec(
         select(Item).where(Item.title.contains(lab.replace("-", " ").title()))
-    ).first()
+    )).first()
     if not lab_item:
         return []
 
-    tasks = db.exec(select(Item).where(Item.parent_id == lab_item.id)).all()
+    tasks = (await session.exec(
+        select(Item).where(Item.parent_id == lab_item.id)
+    )).all()
     task_ids = [task.id for task in tasks]
 
-    results = db.exec(
+    results = (await session.exec(
         select(
             Learner.student_group.label("group"),
             func.avg(InteractionLog.score).label("avg_score"),
@@ -132,7 +139,7 @@ def get_groups(
         .where(InteractionLog.item_id.in_(task_ids))
         .group_by(Learner.student_group)
         .order_by(Learner.student_group)
-    ).all()
+    )).all()
 
     return [
         {
